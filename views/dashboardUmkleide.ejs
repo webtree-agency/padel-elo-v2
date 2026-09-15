@@ -53,7 +53,7 @@
             position: relative;
          }
 
-         .display-image {
+         .display-item {
             width: 100%;
             height: 100%;
             object-fit: cover;
@@ -62,9 +62,10 @@
             left: 0;
             opacity: 0;
             transition: opacity 1s ease-in-out;
+            background: #000;
          }
 
-         .display-image.active {
+         .display-item.active {
             opacity: 1;
          }
       </style>
@@ -72,57 +73,164 @@
    <body>
       <div class="content-area">
          <div class="image-container" id="imageContainer">
-            <img src="/img/padelcamp-promotion.jpeg" alt="Padel Sports Club" class="display-image active" id="fallbackImage" />
+            <img src="/img/padelcamp-promotion.jpeg" alt="Padel Sports Club" class="display-item active" id="fallbackImage" />
          </div>
       </div>
 
       <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
       <script>
          (async function() {
-            try {
-               const res = await fetch('/api/umkleide-images');
+            const FADE_MS = 1000;
+            const RELOAD_MS = 5 * 60 * 1000; // Playlist alle 5 Minuten neu holen
+
+            const container = document.getElementById('imageContainer');
+            const fallback = document.getElementById('fallbackImage');
+
+            const loadImage = (item) => new Promise((resolve, reject) => {
+               const el = new Image();
+               el.onload = () => resolve(el);
+               el.onerror = reject;
+               el.src = item.url;
+               el.className = 'display-item';
+               el.alt = 'Umkleide Display';
+            });
+
+            const loadVideo = (item) => new Promise((resolve, reject) => {
+               const el = document.createElement('video');
+               el.className = 'display-item';
+               el.muted = true;
+               el.playsInline = true;
+               el.setAttribute('playsinline', '');
+               el.preload = 'auto';
+               if (item.poster) el.poster = item.poster;
+               el.oncanplaythrough = () => { el.oncanplaythrough = null; resolve(el); };
+               el.onerror = reject;
+               el.src = item.url;
+               el.load();
+               // Nicht ewig warten – nach 20 s reicht auch "geladen genug"
+               setTimeout(() => resolve(el), 20000);
+            });
+
+            const fetchPlaylist = async () => {
+               const res = await fetch('/api/umkleide-items', { cache: 'no-store' });
                const data = await res.json();
+               return {
+                  items: Array.isArray(data.items) ? data.items : [],
+                  interval: Math.max(1, Number(data.interval) || 10)
+               };
+            };
 
-               if (!data.images || data.images.length === 0) return;
-
-               const container = document.getElementById('imageContainer');
-               const fallback = document.getElementById('fallbackImage');
-
-               // Preload all images
+            const buildEntries = async (items) => {
                const loaded = [];
-               for (const src of data.images) {
-                  const img = await new Promise((resolve, reject) => {
-                     const el = new Image();
-                     el.onload = () => resolve(el);
-                     el.onerror = () => reject();
-                     el.src = src;
-                     el.className = 'display-image';
-                     el.alt = 'Umkleide Display';
-                  });
-                  loaded.push(img);
+               for (const item of items) {
+                  try {
+                     const el = item.kind === 'video' ? await loadVideo(item) : await loadImage(item);
+                     loaded.push({ ...item, el });
+                  } catch (e) {
+                     // kaputter Eintrag – überspringen
+                  }
+               }
+               return loaded;
+            };
+
+            const signature = (items) => items.map(i => i.url).join('|');
+
+            let playlist;
+            try {
+               const data = await fetchPlaylist();
+               playlist = { interval: data.interval, signature: signature(data.items), entries: await buildEntries(data.items) };
+            } catch (e) {
+               return; // Fallback-Bild bleibt stehen
+            }
+            if (playlist.entries.length === 0) return;
+
+            fallback.remove();
+            playlist.entries.forEach(({ el }) => container.appendChild(el));
+
+            let current = -1;
+            let timer = null;
+            let pending = null; // frisch geladene Playlist, wird beim nächsten Wechsel eingesetzt
+
+            const show = (index) => {
+               const prev = playlist.entries[current];
+               if (prev) {
+                  prev.el.classList.remove('active');
+                  if (prev.kind === 'video') {
+                     setTimeout(() => { prev.el.pause(); prev.el.currentTime = 0; }, FADE_MS);
+                  }
                }
 
-               if (loaded.length === 0) return;
+               current = index;
+               const entry = playlist.entries[current];
+               entry.el.classList.add('active');
 
-               // Remove fallback, add loaded images
-               fallback.remove();
-               loaded.forEach(img => container.appendChild(img));
+               if (entry.kind === 'video') {
+                  const video = entry.el;
+                  video.currentTime = 0;
+                  video.onended = () => next();
+                  video.onerror = () => next();
+                  video.play().catch(() => {
+                     // Autoplay verweigert oder Datei kaputt – nach dem Intervall weiter
+                     timer = setTimeout(next, playlist.interval * 1000);
+                  });
+               } else {
+                  timer = setTimeout(next, playlist.interval * 1000);
+               }
+            };
 
-               // Show first image
-               let current = 0;
-               loaded[0].classList.add('active');
+            const next = () => {
+               clearTimeout(timer);
+               timer = null;
 
-               if (loaded.length === 1) return;
+               if (pending) {
+                  // Alte Elemente raus, neue rein – der aktive blendet aus, während der neue einblendet
+                  const old = playlist.entries;
+                  const prev = old[current];
+                  if (prev) {
+                     prev.el.classList.remove('active');
+                     if (prev.kind === 'video') setTimeout(() => prev.el.pause(), FADE_MS);
+                  }
+                  if (fallback.isConnected) {
+                     fallback.classList.remove('active');
+                     setTimeout(() => fallback.remove(), FADE_MS);
+                  }
+                  playlist = pending;
+                  pending = null;
+                  playlist.entries.forEach(({ el }) => container.appendChild(el));
+                  setTimeout(() => old.forEach(({ el }) => { if (!playlist.entries.some(e => e.el === el)) el.remove(); }), FADE_MS);
+                  current = -1;
+                  if (playlist.entries.length === 0) {
+                     container.appendChild(fallback);
+                     fallback.classList.add('active');
+                     return;
+                  }
+               }
 
-               // Cycle through images
-               setInterval(() => {
-                  loaded[current].classList.remove('active');
-                  current = (current + 1) % loaded.length;
-                  loaded[current].classList.add('active');
-               }, data.interval * 1000);
-            } catch (e) {
-               // Fallback image stays visible
-            }
+               if (playlist.entries.length === 1 && current === 0) {
+                  // Nur ein Eintrag: Bild einfach stehen lassen, Video von vorn
+                  const only = playlist.entries[0];
+                  if (only.kind === 'video') { only.el.currentTime = 0; only.el.play().catch(() => {}); }
+                  return;
+               }
+               show((current + 1) % playlist.entries.length);
+            };
+
+            show(0);
+
+            // Playlist im Hintergrund erneuern, damit neue Uploads ohne Neuladen erscheinen
+            setInterval(async () => {
+               try {
+                  const data = await fetchPlaylist();
+                  playlist.interval = data.interval;
+                  const sig = signature(data.items);
+                  if (sig === playlist.signature || (pending && sig === pending.signature)) return;
+                  pending = { interval: data.interval, signature: sig, entries: await buildEntries(data.items) };
+                  // Steht nur ein Bild (oder gar nichts), würde sonst nie gewechselt – jetzt anstossen
+                  if (playlist.entries.length === 0 || (playlist.entries.length === 1 && playlist.entries[0].kind === 'image')) next();
+               } catch (e) {
+                  // beim nächsten Mal wieder versuchen
+               }
+            }, RELOAD_MS);
          })();
       </script>
    </body>

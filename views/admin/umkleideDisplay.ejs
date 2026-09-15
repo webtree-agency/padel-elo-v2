@@ -39,6 +39,7 @@
             <i class="fas fa-save me-1"></i>Speichern
           </button>
         </div>
+        <div class="form-text">Gilt für Bilder. Videos laufen immer in voller Länge.</div>
       </div>
     </div>
   </div>
@@ -49,33 +50,51 @@
   <div class="col-md-12">
     <div class="card shadow-sm">
       <div class="card-header bg-white">
-        <h5 class="mb-0"><i class="fas fa-upload me-2"></i>Bilder hochladen</h5>
+        <h5 class="mb-0"><i class="fas fa-upload me-2"></i>Bilder und Videos hochladen</h5>
       </div>
       <div class="card-body">
-        <form action="/admin/umkleide-display/upload" method="POST" enctype="multipart/form-data">
+        <form action="/admin/umkleide-display/upload" method="POST" enctype="multipart/form-data" id="uploadForm">
           <div class="mb-3">
-            <input type="file" class="form-control" name="images" multiple accept="image/jpeg,image/png,image/webp">
-            <div class="form-text">JPEG, PNG oder WebP. Max 10MB pro Datei. Empfohlen: 9:16 Format.</div>
+            <input type="file" class="form-control" name="files" id="fileInput" multiple
+                   accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,video/x-m4v">
+            <div class="form-text">
+              Bilder: JPEG, PNG, WebP · Videos: MP4, MOV, WebM · max. 10 Dateien, 500 MB pro Datei.
+              Alles wird automatisch auf 9:16 (1080×1920) zugeschnitten und komprimiert – Hochformat aufnehmen, sonst wird seitlich beschnitten.
+            </div>
           </div>
-          <button type="submit" class="btn btn-success">
+          <div id="fileList" class="mb-3 d-none">
+            <ul class="list-group list-group-flush small" id="fileListItems"></ul>
+          </div>
+          <button type="submit" class="btn btn-success" id="uploadBtn">
             <i class="fas fa-cloud-upload-alt me-1"></i>Hochladen
           </button>
+          <div id="uploadProgress" class="mt-3 d-none">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <div class="spinner-border spinner-border-sm text-success" role="status"></div>
+              <span id="uploadStatus">Wird hochgeladen …</span>
+            </div>
+            <div class="progress" style="height: 8px;">
+              <div class="progress-bar bg-success" id="uploadBar" role="progressbar" style="width: 0%"></div>
+            </div>
+            <div class="form-text">Videos werden nach dem Upload auf dem Server umgewandelt – das kann je nach Länge einige Minuten dauern. Bitte die Seite offen lassen.</div>
+          </div>
         </form>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Vorhandene Bilder -->
+<!-- Vorhandene Einträge -->
 <div class="row mb-4">
   <div class="col-md-12">
     <div class="card shadow-sm">
       <div class="card-header bg-white">
-        <div class="d-flex justify-content-between align-items-center">
-          <h5 class="mb-0"><i class="fas fa-images me-2"></i>Vorhandene Bilder</h5>
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <h5 class="mb-0"><i class="fas fa-photo-video me-2"></i>Slideshow</h5>
           <div class="d-flex align-items-center gap-2">
-            <span class="badge bg-primary"><%= settings.images.length %> Bilder</span>
-            <% if (settings.images.length > 0) { %>
+            <span class="badge bg-primary"><%= items.length %> Einträge</span>
+            <span class="badge bg-secondary"><%= (totalBytes / 1024 / 1024).toFixed(1) %> MB</span>
+            <% if (items.length > 0) { %>
               <button class="btn btn-outline-danger btn-sm" id="deleteAllBtn">
                 <i class="fas fa-trash me-1"></i>Alle löschen
               </button>
@@ -84,22 +103,34 @@
         </div>
       </div>
       <div class="card-body">
-        <% if (settings.images.length === 0) { %>
-          <p class="text-muted mb-0">Noch keine Bilder hochgeladen.</p>
+        <% if (items.length === 0) { %>
+          <p class="text-muted mb-0">Noch nichts hochgeladen.</p>
         <% } else { %>
           <div class="row g-3">
-            <% settings.images.forEach(function(image) { %>
-              <div class="col-6 col-md-4 col-lg-3" id="image-<%= image._id %>">
-                <div class="card h-100 <%= image.active ? '' : 'opacity-50' %>">
-                  <img src="<%= image.imageData %>" class="card-img-top" alt="<%= image.originalName %>" style="height: 200px; object-fit: cover;">
-                  <div class="card-body p-2 text-center">
-                    <small class="text-muted d-block text-truncate mb-2" title="<%= image.originalName %>"><%= image.originalName %></small>
-                    <div class="btn-group btn-group-sm w-100">
-                      <button class="btn <%= image.active ? 'btn-success' : 'btn-outline-secondary' %> toggle-btn" data-id="<%= image._id %>">
-                        <i class="fas <%= image.active ? 'fa-eye' : 'fa-eye-slash' %>"></i>
-                        <%= image.active ? 'Aktiv' : 'Inaktiv' %>
+            <% items.forEach(function(item) { %>
+              <div class="col-6 col-md-4 col-lg-3" id="item-<%= item.id %>">
+                <div class="card h-100 <%= item.active ? '' : 'opacity-50' %>">
+                  <div class="position-relative bg-dark" style="aspect-ratio: 9 / 16; max-height: 320px; overflow: hidden;">
+                    <% if (item.kind === 'video') { %>
+                      <video class="w-100 h-100" style="object-fit: cover;" src="<%= item.url %>" <%- item.poster ? 'poster="' + item.poster + '"' : '' %> muted playsinline preload="metadata" loop></video>
+                      <span class="position-absolute top-0 start-0 m-2 badge bg-danger"><i class="fas fa-video me-1"></i>Video<% if (item.duration) { %> · <%= Math.round(item.duration) %> s<% } %></span>
+                      <button type="button" class="btn btn-light btn-sm rounded-circle position-absolute top-50 start-50 translate-middle preview-btn" title="Vorschau abspielen" style="width: 44px; height: 44px;">
+                        <i class="fas fa-play"></i>
                       </button>
-                      <button class="btn btn-outline-danger delete-btn" data-id="<%= image._id %>">
+                    <% } else { %>
+                      <img src="<%= item.url %>" class="w-100 h-100" style="object-fit: cover;" alt="<%= item.originalName %>" loading="lazy">
+                      <span class="position-absolute top-0 start-0 m-2 badge bg-info text-dark"><i class="fas fa-image me-1"></i>Bild</span>
+                    <% } %>
+                  </div>
+                  <div class="card-body p-2 text-center">
+                    <small class="text-muted d-block text-truncate" title="<%= item.originalName %>"><%= item.originalName %></small>
+                    <small class="text-muted d-block mb-2"><%= item.size ? (item.size >= 1024 * 1024 ? (item.size / 1024 / 1024).toFixed(1) + ' MB' : Math.round(item.size / 1024) + ' KB') : '' %></small>
+                    <div class="btn-group btn-group-sm w-100">
+                      <button class="btn <%= item.active ? 'btn-success' : 'btn-outline-secondary' %> toggle-btn" data-id="<%= item.id %>">
+                        <i class="fas <%= item.active ? 'fa-eye' : 'fa-eye-slash' %>"></i>
+                        <%= item.active ? 'Aktiv' : 'Inaktiv' %>
+                      </button>
+                      <button class="btn btn-outline-danger delete-btn" data-id="<%= item.id %>">
                         <i class="fas fa-trash"></i>
                       </button>
                     </div>
@@ -116,6 +147,76 @@
 
 <script>
   document.addEventListener('DOMContentLoaded', function() {
+    // Dateiliste anzeigen
+    const fileInput = document.getElementById('fileInput');
+    const fileList = document.getElementById('fileList');
+    const fileListItems = document.getElementById('fileListItems');
+    fileInput.addEventListener('change', function() {
+      fileListItems.innerHTML = '';
+      if (!this.files.length) { fileList.classList.add('d-none'); return; }
+      Array.from(this.files).forEach(file => {
+        const li = document.createElement('li');
+        li.className = 'list-group-item px-0 py-1 d-flex justify-content-between';
+        const isVideo = file.type.startsWith('video/');
+        li.innerHTML = '<span><i class="fas ' + (isVideo ? 'fa-video text-danger' : 'fa-image text-info') + ' me-2"></i></span>' +
+          '<span class="text-muted ms-auto">' + (file.size / 1024 / 1024).toFixed(1) + ' MB</span>';
+        li.firstChild.appendChild(document.createTextNode(file.name));
+        fileListItems.appendChild(li);
+      });
+      fileList.classList.remove('d-none');
+    });
+
+    // Upload mit Fortschrittsbalken (danach wartet der Server auf die Umwandlung)
+    const uploadForm = document.getElementById('uploadForm');
+    uploadForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      if (!fileInput.files.length) { alert('Bitte zuerst Dateien auswählen'); return; }
+      const uploadBtn = document.getElementById('uploadBtn');
+      const progress = document.getElementById('uploadProgress');
+      const bar = document.getElementById('uploadBar');
+      const status = document.getElementById('uploadStatus');
+      uploadBtn.disabled = true;
+      fileInput.disabled = true;
+      progress.classList.remove('d-none');
+
+      const formData = new FormData();
+      Array.from(fileInput.files).forEach(file => formData.append('files', file));
+      fileInput.disabled = false;
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', uploadForm.action);
+      xhr.upload.addEventListener('progress', (ev) => {
+        if (!ev.lengthComputable) return;
+        const pct = Math.round(ev.loaded / ev.total * 100);
+        bar.style.width = pct + '%';
+        status.textContent = pct < 100 ? 'Wird hochgeladen … ' + pct + ' %' : 'Wird umgewandelt und komprimiert …';
+        if (pct >= 100) bar.classList.add('progress-bar-striped', 'progress-bar-animated');
+      });
+      xhr.addEventListener('load', () => {
+        // Der Server antwortet mit einem Redirect – dorthin folgen
+        window.location.href = xhr.responseURL || '/admin/umkleide-display';
+      });
+      xhr.addEventListener('error', () => {
+        status.textContent = 'Upload fehlgeschlagen';
+        uploadBtn.disabled = false;
+      });
+      xhr.send(formData);
+    });
+
+    // Video-Vorschau abspielen/anhalten
+    document.querySelectorAll('.preview-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const video = this.parentElement.querySelector('video');
+        if (video.paused) {
+          video.play();
+          this.innerHTML = '<i class="fas fa-pause"></i>';
+        } else {
+          video.pause();
+          this.innerHTML = '<i class="fas fa-play"></i>';
+        }
+      });
+    });
+
     // Intervall speichern
     document.getElementById('saveIntervalBtn').addEventListener('click', async function() {
       const interval = document.getElementById('intervalInput').value;
@@ -141,7 +242,7 @@
       }
     });
 
-    // Toggle Bild aktiv/inaktiv
+    // Eintrag aktiv/inaktiv
     document.querySelectorAll('.toggle-btn').forEach(btn => {
       btn.addEventListener('click', async function() {
         const id = this.dataset.id;
@@ -149,7 +250,7 @@
           const res = await fetch('/admin/umkleide-display/' + id + '/toggle', { method: 'POST' });
           const data = await res.json();
           if (data.success) {
-            const card = document.getElementById('image-' + id);
+            const card = document.getElementById('item-' + id);
             const innerCard = card.querySelector('.card');
             if (data.active) {
               innerCard.classList.remove('opacity-50');
@@ -167,16 +268,16 @@
       });
     });
 
-    // Bild löschen
+    // Eintrag löschen
     document.querySelectorAll('.delete-btn').forEach(btn => {
       btn.addEventListener('click', async function() {
-        if (!confirm('Bild wirklich löschen?')) return;
+        if (!confirm('Eintrag wirklich löschen?')) return;
         const id = this.dataset.id;
         try {
           const res = await fetch('/admin/umkleide-display/' + id, { method: 'DELETE' });
           const data = await res.json();
           if (data.success) {
-            document.getElementById('image-' + id).remove();
+            document.getElementById('item-' + id).remove();
           }
         } catch (err) {
           alert('Fehler beim Löschen');
@@ -184,11 +285,11 @@
       });
     });
 
-    // Alle Bilder löschen
+    // Alle Einträge löschen
     const deleteAllBtn = document.getElementById('deleteAllBtn');
     if (deleteAllBtn) {
       deleteAllBtn.addEventListener('click', async function() {
-        if (!confirm('Wirklich ALLE Bilder löschen?')) return;
+        if (!confirm('Wirklich ALLE Bilder und Videos löschen?')) return;
         try {
           const res = await fetch('/admin/umkleide-display/all', { method: 'DELETE' });
           const data = await res.json();

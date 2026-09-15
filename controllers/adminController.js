@@ -6,7 +6,7 @@ const GameReport = require('../models/GameReport');
 const QuarterlyELO = require('../models/QuarterlyELO');
 const PadelSchedule = require('../models/PadelSchedule');
 const UmkleideSetting = require('../models/UmkleideSetting');
-const sharp = require('sharp');
+const umkleideMedia = require('../utils/umkleideMedia');
 const moment = require('moment-timezone');
 const { sendRegistrationApprovedEmail, sendScheduleNotificationEmail } = require('../config/email');
 const { recalculateQuarterlyELO, recalculateAllELO, distributeQuarterlyAwards } = require('../utils/cronJobs');
@@ -1615,13 +1615,28 @@ exports.removeAward = async (req, res) => {
 
 // ==================== Umkleide Display ====================
 
+const umkleideItemToJSON = (item) => ({
+  id: item._id,
+  kind: item.kind,
+  url: `/umkleide-media/${item.fileId}`,
+  poster: item.posterId ? `/umkleide-media/${item.posterId}` : null,
+  duration: item.duration || null,
+  size: item.size || null,
+  originalName: item.originalName,
+  active: item.active
+});
+
 exports.getUmkleideDisplay = async (req, res) => {
   try {
     const settings = await UmkleideSetting.getSettings();
     const pendingRequestsCount = await RegistrationRequest.countDocuments({ status: 'pending' });
+    const items = settings.items.map(umkleideItemToJSON);
+    const totalBytes = settings.items.reduce((sum, item) => sum + (item.size || 0), 0);
     res.render('admin/umkleideDisplay', {
       title: 'Umkleide Display',
       settings,
+      items,
+      totalBytes,
       user: req.user,
       pendingRequestsCount,
       success: req.query.success || null,
@@ -1636,93 +1651,106 @@ exports.getUmkleideDisplay = async (req, res) => {
   }
 };
 
-exports.uploadUmkleideImages = async (req, res) => {
+exports.uploadUmkleideItems = async (req, res) => {
+  const files = req.files || [];
   try {
-    if (!req.files || req.files.length === 0) {
+    if (files.length === 0) {
       return res.redirect('/admin/umkleide-display?error=Keine Dateien ausgewählt');
     }
     const settings = await UmkleideSetting.getSettings();
-    const existingNames = settings.images.map(img => img.originalName);
+    const existingNames = settings.items.map(item => item.originalName);
     const skipped = [];
+    const failed = [];
+    let added = 0;
 
-    for (const file of req.files) {
-      if (existingNames.includes(file.originalname)) {
-        skipped.push(file.originalname);
-        continue;
+    for (const file of files) {
+      try {
+        if (existingNames.includes(file.originalname)) {
+          skipped.push(file.originalname);
+          continue;
+        }
+
+        const processed = umkleideMedia.isVideo(file.mimetype)
+          ? await umkleideMedia.processVideo(file.path, file.originalname)
+          : await umkleideMedia.processImage(file.path, file.originalname);
+
+        settings.items.push({
+          ...processed,
+          originalName: file.originalname,
+          active: true
+        });
+        existingNames.push(file.originalname);
+        added++;
+      } catch (error) {
+        console.error(`Umkleide upload: ${file.originalname} fehlgeschlagen –`, error.message);
+        failed.push(file.originalname);
+      } finally {
+        await umkleideMedia.removeTempFile(file.path);
       }
-
-      const processedBuffer = await sharp(file.buffer)
-        .resize(1080, 1920, {
-          fit: 'cover',
-          position: 'center'
-        })
-        .webp({
-          quality: 80,
-          effort: 6
-        })
-        .toBuffer();
-
-      const base64Image = `data:image/webp;base64,${processedBuffer.toString('base64')}`;
-
-      settings.images.push({
-        imageData: base64Image,
-        originalName: file.originalname,
-        active: true
-      });
-      existingNames.push(file.originalname);
     }
     await settings.save();
 
-    if (skipped.length > 0) {
-      return res.redirect('/admin/umkleide-display?error=Übersprungen (bereits vorhanden): ' + skipped.join(', '));
+    const notes = [];
+    if (skipped.length > 0) notes.push('Übersprungen (bereits vorhanden): ' + skipped.join(', '));
+    if (failed.length > 0) notes.push('Fehlgeschlagen: ' + failed.join(', '));
+    if (notes.length > 0) {
+      const prefix = added > 0 ? `${added} Datei(en) hochgeladen. ` : '';
+      return res.redirect('/admin/umkleide-display?error=' + encodeURIComponent(prefix + notes.join(' · ')));
     }
-    res.redirect('/admin/umkleide-display?success=Bilder erfolgreich hochgeladen');
+    res.redirect('/admin/umkleide-display?success=' + encodeURIComponent(`${added} Datei(en) erfolgreich hochgeladen`));
   } catch (error) {
-    console.error('Upload umkleide images error:', error);
+    console.error('Upload umkleide items error:', error);
+    await Promise.all(files.map(file => umkleideMedia.removeTempFile(file.path)));
     res.redirect('/admin/umkleide-display?error=Fehler beim Hochladen');
   }
 };
 
-exports.deleteUmkleideImage = async (req, res) => {
+exports.deleteUmkleideItem = async (req, res) => {
   try {
     const settings = await UmkleideSetting.getSettings();
-    const image = settings.images.id(req.params.id);
-    if (!image) {
-      return res.status(404).json({ success: false, message: 'Bild nicht gefunden' });
+    const item = settings.items.id(req.params.id);
+    if (!item) {
+      return res.status(404).json({ success: false, message: 'Eintrag nicht gefunden' });
     }
-    settings.images.pull({ _id: req.params.id });
+    await umkleideMedia.deleteFile(item.fileId);
+    await umkleideMedia.deleteFile(item.posterId);
+    settings.items.pull({ _id: req.params.id });
     await settings.save();
-    res.json({ success: true, message: 'Bild gelöscht' });
+    res.json({ success: true, message: 'Eintrag gelöscht' });
   } catch (error) {
-    console.error('Delete umkleide image error:', error);
+    console.error('Delete umkleide item error:', error);
     res.status(500).json({ success: false, message: 'Fehler beim Löschen' });
   }
 };
 
-exports.deleteAllUmkleideImages = async (req, res) => {
+exports.deleteAllUmkleideItems = async (req, res) => {
   try {
     const settings = await UmkleideSetting.getSettings();
-    settings.images = [];
+    for (const item of settings.items) {
+      await umkleideMedia.deleteFile(item.fileId);
+      await umkleideMedia.deleteFile(item.posterId);
+    }
+    settings.items = [];
     await settings.save();
-    res.json({ success: true, message: 'Alle Bilder gelöscht' });
+    res.json({ success: true, message: 'Alle Einträge gelöscht' });
   } catch (error) {
-    console.error('Delete all umkleide images error:', error);
+    console.error('Delete all umkleide items error:', error);
     res.status(500).json({ success: false, message: 'Fehler beim Löschen' });
   }
 };
 
-exports.toggleUmkleideImage = async (req, res) => {
+exports.toggleUmkleideItem = async (req, res) => {
   try {
     const settings = await UmkleideSetting.getSettings();
-    const image = settings.images.id(req.params.id);
-    if (!image) {
-      return res.status(404).json({ success: false, message: 'Bild nicht gefunden' });
+    const item = settings.items.id(req.params.id);
+    if (!item) {
+      return res.status(404).json({ success: false, message: 'Eintrag nicht gefunden' });
     }
-    image.active = !image.active;
+    item.active = !item.active;
     await settings.save();
-    res.json({ success: true, active: image.active });
+    res.json({ success: true, active: item.active });
   } catch (error) {
-    console.error('Toggle umkleide image error:', error);
+    console.error('Toggle umkleide item error:', error);
     res.status(500).json({ success: false, message: 'Fehler beim Umschalten' });
   }
 };
@@ -1743,15 +1771,31 @@ exports.updateUmkleideInterval = async (req, res) => {
   }
 };
 
-exports.getUmkleideImagesAPI = async (req, res) => {
+exports.getUmkleideItemsAPI = async (req, res) => {
   try {
     const settings = await UmkleideSetting.getSettings();
-    const activeImages = settings.images
-      .filter(img => img.active)
-      .map(img => img.imageData);
-    res.json({ images: activeImages, interval: settings.interval });
+    const items = settings.items
+      .filter(item => item.active)
+      .map(item => {
+        const json = umkleideItemToJSON(item);
+        return { kind: json.kind, url: json.url, poster: json.poster, duration: json.duration };
+      });
+    res.set('Cache-Control', 'no-store');
+    res.json({ items, interval: settings.interval });
   } catch (error) {
-    console.error('Get umkleide images API error:', error);
-    res.status(500).json({ images: [], interval: 10 });
+    console.error('Get umkleide items API error:', error);
+    res.status(500).json({ items: [], interval: 10 });
+  }
+};
+
+exports.streamUmkleideMedia = async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.fileId)) {
+      return res.status(404).end();
+    }
+    await umkleideMedia.streamToResponse(req.params.fileId, req, res);
+  } catch (error) {
+    console.error('Stream umkleide media error:', error);
+    if (!res.headersSent) res.status(500).end();
   }
 };
