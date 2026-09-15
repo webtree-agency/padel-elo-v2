@@ -11,12 +11,19 @@ const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const { generalLimiter } = require('./middleware/rateLimitMiddleware');
 const { initCronJobs } = require('./utils/cronJobs');
+const mongoose = require('mongoose');
+const { migrateLegacyImages } = require('./utils/umkleideMedia');
 
 // Load environment variables
 dotenv.config();
 
 // Connect to database
 connectDB();
+
+// Alte Base64-Bilder des Umkleide-Displays einmalig nach GridFS übernehmen
+mongoose.connection.once('open', () => {
+  migrateLegacyImages().catch((error) => console.error('Umkleide-Migration fehlgeschlagen:', error));
+});
 
 // Initialize app
 const app = express();

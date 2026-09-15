@@ -5,7 +5,7 @@ const Game = require('../models/Game');
 const QuarterlyELO = require('../models/QuarterlyELO');
 const { protect } = require('../middleware/authMiddleware');
 const { ensureAllUsersHaveQuarterlyRecords } = require('../utils/quarterlyEloUtils');
-const { getActiveScheduleAPI, getUmkleideImagesAPI } = require('../controllers/adminController');
+const { getActiveScheduleAPI, getUmkleideItemsAPI, streamUmkleideMedia } = require('../controllers/adminController');
 const { getAwardInfo } = require('../utils/awardUtils');
 
 // @desc    Home page with rankings
@@ -440,7 +440,7 @@ router.get('/dashboardtv', async (req, res) => {
 });
 
 /**
- * @desc    Dashboard for Umkleide display with image slideshow
+ * @desc    Dashboard for Umkleide display with image/video slideshow
  * @route   GET /dashboardUmkleide
  * @access  Public
  */
@@ -465,6 +465,8 @@ router.get('/dashboardUmkleide', async (req, res) => {
  * @access  Public
  */
 router.get('/api/padel-schedule', getActiveScheduleAPI);
-router.get('/api/umkleide-images', getUmkleideImagesAPI);
+router.get('/api/umkleide-items', getUmkleideItemsAPI);
+router.get('/umkleide-media/:fileId', streamUmkleideMedia);
+router.head('/umkleide-media/:fileId', streamUmkleideMedia);
 
 module.exports = router;

@@ -31,13 +31,13 @@ const {
   removeAward,
   autoDistributeAwards,
   getUmkleideDisplay,
-  uploadUmkleideImages,
-  deleteUmkleideImage,
-  deleteAllUmkleideImages,
-  toggleUmkleideImage,
+  uploadUmkleideItems,
+  deleteUmkleideItem,
+  deleteAllUmkleideItems,
+  toggleUmkleideItem,
   updateUmkleideInterval
 } = require('../controllers/adminController');
-const umkleideUpload = require('../middleware/umkleideImageUpload');
+const { upload: umkleideUpload, handleUploadError: handleUmkleideUploadError } = require('../middleware/umkleideUpload');
 
 // Apply admin protection to all routes
 router.use(protect);
@@ -87,10 +87,10 @@ router.post('/awards/auto-distribute', autoDistributeAwards);
 
 // Umkleide Display routes
 router.get('/umkleide-display', getUmkleideDisplay);
-router.post('/umkleide-display/upload', umkleideUpload.array('images', 10), uploadUmkleideImages);
-router.delete('/umkleide-display/all', deleteAllUmkleideImages);
-router.post('/umkleide-display/:id/toggle', toggleUmkleideImage);
-router.delete('/umkleide-display/:id', deleteUmkleideImage);
+router.post('/umkleide-display/upload', umkleideUpload.array('files', 10), handleUmkleideUploadError, uploadUmkleideItems);
+router.delete('/umkleide-display/all', deleteAllUmkleideItems);
+router.post('/umkleide-display/:id/toggle', toggleUmkleideItem);
+router.delete('/umkleide-display/:id', deleteUmkleideItem);
 router.put('/umkleide-display/interval', updateUmkleideInterval);
 
 module.exports = router;
